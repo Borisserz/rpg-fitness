@@ -36,3 +36,12 @@ firebase-debug.log
 
 # Root npm noise (no root package)
 /package-lock.json
+
+# App Store Connect upload PNGs (keep local; do not publish to GitHub)
+marketing/ASC-UPLOAD/
+
+# Screenshot editor build/export artifacts (source stays tracked)
+marketing/app-store-screenshots/node_modules/
+marketing/app-store-screenshots/.next/
+marketing/app-store-screenshots/exports/
+marketing/app-store-screenshots/out/

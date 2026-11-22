@@ -19,7 +19,6 @@
 		AC7766A52FE736EE0067B7D3 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 5F7203E8C8463C592AFE691E /* GoogleSignIn */; };
 		AC7766A62FE736EE0067B7D3 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 8EB1AEBA9744F78D8CB919FC /* GoogleSignInSwift */; };
 		AC7769E92FE73D970067B7D3 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = AC7769E82FE73D970067B7D3 /* FirebaseFunctions */; };
-		ACPIV1E92FF7D100165755 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = ACPIV1E82FF7D100165755 /* PrivacyInfo.xcprivacy */; };
 		B1WIDGET001SHARED0000000001 /* WidgetSharedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1WIDGET001SHARED0000000002 /* WidgetSharedData.swift */; };
 		F8C4E889E7C344B7086CCE31 /* LiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64891D2319AF89FD8223E730 /* LiveActivityAttributes.swift */; };
 /* End PBXBuildFile section */
@@ -31,6 +30,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = F6E963CFBACEF4944DFE0F1D;
 			remoteInfo = FitRPGWidget;
+		};
+		T00100000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 93E04F122FE41A0700C2384D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 93E04F192FE41A0700C2384D;
+			remoteInfo = "rpg-tracker";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -53,17 +59,22 @@
 		6449F96403895101857D41DF /* FitRPGWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FitRPGWidget.swift; path = FitRPGWidget/FitRPGWidget.swift; sourceTree = "<group>"; };
 		64891D2319AF89FD8223E730 /* LiveActivityAttributes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveActivityAttributes.swift; path = "rpg-tracker/Models/LiveActivityAttributes.swift"; sourceTree = "<group>"; };
 		93E04F1A2FE41A0700C2384D /* rpg-tracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "rpg-tracker.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		ACPIV1E82FF7D100165755 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = "rpg-tracker/PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
 		B1WIDGET001ENTIT0000000003 /* FitRPGWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; name = FitRPGWidget.entitlements; path = FitRPGWidget/FitRPGWidget.entitlements; sourceTree = "<group>"; };
 		B1WIDGET001SHARED0000000002 /* WidgetSharedData.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetSharedData.swift; path = FitRPGWidget/WidgetSharedData.swift; sourceTree = "<group>"; };
 		B5FB13102CFD3F5C27BFC044 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		E17EF1D2C58DAEDDB74FBADD /* FitRPGWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FitRPGWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		T00100000000000000000002 /* rpg-trackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "rpg-trackerTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		93E04F1C2FE41A0700C2384D /* rpg-tracker */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "rpg-tracker";
+			sourceTree = "<group>";
+		};
+		T00100000000000000000003 /* rpg-trackerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "rpg-trackerTests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -93,6 +104,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		T00100000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -108,7 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				93E04F1C2FE41A0700C2384D /* rpg-tracker */,
-				ACPIV1E82FF7D100165755 /* PrivacyInfo.xcprivacy */,
+				T00100000000000000000003 /* rpg-trackerTests */,
 				AC7769582FE73A9B0067B7D3 /* Frameworks */,
 				93E04F1B2FE41A0700C2384D /* Products */,
 				94999E9769E42475B26538D0 /* FitRPGWidgetSources */,
@@ -120,6 +138,7 @@
 			children = (
 				93E04F1A2FE41A0700C2384D /* rpg-tracker.app */,
 				E17EF1D2C58DAEDDB74FBADD /* FitRPGWidget.appex */,
+				T00100000000000000000002 /* rpg-trackerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -197,6 +216,27 @@
 			productReference = E17EF1D2C58DAEDDB74FBADD /* FitRPGWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		T00100000000000000000005 /* rpg-trackerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = T00100000000000000000006 /* Build configuration list for PBXNativeTarget "rpg-trackerTests" */;
+			buildPhases = (
+				T00100000000000000000007 /* Sources */,
+				T00100000000000000000004 /* Frameworks */,
+				T00100000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				T00100000000000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				T00100000000000000000003 /* rpg-trackerTests */,
+			);
+			name = "rpg-trackerTests";
+			productName = "rpg-trackerTests";
+			productReference = T00100000000000000000002 /* rpg-trackerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -240,6 +280,7 @@
 			targets = (
 				93E04F192FE41A0700C2384D /* rpg-tracker */,
 				F6E963CFBACEF4944DFE0F1D /* FitRPGWidget */,
+				T00100000000000000000005 /* rpg-trackerTests */,
 			);
 		};
 /* End PBXProject section */
@@ -256,7 +297,13 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				ACPIV1E92FF7D100165755 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		T00100000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,6 +327,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		T00100000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -288,6 +342,11 @@
 			name = FitRPGWidget;
 			target = F6E963CFBACEF4944DFE0F1D /* FitRPGWidget */;
 			targetProxy = CE68A9B02B886F44BEE48542 /* PBXContainerItemProxy */;
+		};
+		T00100000000000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 93E04F192FE41A0700C2384D /* rpg-tracker */;
+			targetProxy = T00100000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -298,7 +357,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = FitRPGWidget/FitRPGWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = LSCCP92LMG;
 				GENERATE_INFOPLIST = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -553,7 +612,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = FitRPGWidget/FitRPGWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = LSCCP92LMG;
 				GENERATE_INFOPLIST = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -574,6 +633,48 @@
 				WRAPPER_EXTENSION = appex;
 			};
 			name = Debug;
+		};
+		T0010000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LSCCP92LMG;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.borisdev.rpg-trackerTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rpg-tracker.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rpg-tracker";
+			};
+			name = Debug;
+		};
+		T0010000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LSCCP92LMG;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.borisdev.rpg-trackerTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rpg-tracker.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rpg-tracker";
+			};
+			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
@@ -601,6 +702,15 @@
 			buildConfigurations = (
 				66217B7B0AA35DC2E303A80C /* Release */,
 				A5D8EB76B6BF414DCE8779FB /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		T00100000000000000000006 /* Build configuration list for PBXNativeTarget "rpg-trackerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				T0010000000000000000000A /* Debug */,
+				T0010000000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

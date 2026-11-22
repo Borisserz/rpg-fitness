@@ -12,9 +12,14 @@ import {
     WORLD_BOSS_MAX_DAMAGE_PER_CALL,
     WORLD_BOSS_ATTACKS_PER_HOUR,
     ACTIVITY_REWARDS_PER_HOUR,
+    allocateStatPointUpdate,
     applyXpToProgression,
     clampActivityRewards,
     clampPvERewards,
+    computeClanBuffActivation,
+    computeClanBuffMultipliers,
+    computeClanTreasuryDeposit,
+    computeDailyQuestClaim,
     computePassiveRegen,
     computeTrainEnergyGrant,
     consumeEnergyChargeForRefund,
@@ -293,6 +298,7 @@ export const cancelClanWarSearch = fitRpgOnCall(async (data, context) => {
 });
 
 
+
 // -------------------------------------------------------------------
 // 2. PubSub Cron: Process Clan War Phases
 // -------------------------------------------------------------------
@@ -473,9 +479,6 @@ export const recordClanWarAttack = fitRpgOnCall(async (data, context) => {
         throw new functions.https.HttpsError("failed-precondition", "User is not in a clan.");
     }
 
-    const won = rollClanWarWin(userData.basePower || 100);
-    const scoreToAdd = won ? 100 : 0;
-
     const clanId = userData.clanId;
     const clanRef = db.collection("clans").doc(clanId);
 
@@ -498,6 +501,12 @@ export const recordClanWarAttack = fitRpgOnCall(async (data, context) => {
         if ((members[memberIndex].warAttacksUsed || 0) >= 3) {
             throw new functions.https.HttpsError("resource-exhausted", "Attack limit reached for this war.");
         }
+
+        const nowMs = Date.now();
+        const buffs = computeClanBuffMultipliers(clanData.activeBuffs, nowMs);
+        const effectivePower = Math.round((userData.basePower || 100) * (1 + buffs.warPowerBonus));
+        const won = rollClanWarWin(effectivePower);
+        const scoreToAdd = won ? 100 : 0;
 
         const opponentClanId = clanData.activeWar.opponentClanId || null;
         let oppRef: admin.firestore.DocumentReference | null = null;
@@ -525,8 +534,8 @@ export const recordClanWarAttack = fitRpgOnCall(async (data, context) => {
 
         // Single reward path: grant war attack rewards server-side (client must not award).
         const userRef = db.collection("users").doc(uid);
-        const xpGain = won ? 80 : 25;
-        const goldGain = won ? 40 : 10;
+        const xpGain = Math.round((won ? 80 : 25) * buffs.xpMultiplier);
+        const goldGain = Math.round((won ? 40 : 10) * buffs.goldMultiplier);
         const selectedClass = userData.selectedClass || "Archer";
         const { updates: progUpdates } = applyXpToProgression(
             userData.progressions || {},
@@ -799,6 +808,7 @@ export const sendFriendRequest = fitRpgOnCall(async (data, context) => {
     return { success: true };
 });
 
+
 // -------------------------------------------------------------------
 // 5b. HTTP Callable: Search Players (by username prefix or UID)
 // -------------------------------------------------------------------
@@ -897,6 +907,7 @@ export const inviteToTeam3v3 = fitRpgOnCall(async (data, context) => {
     return { success: true };
 });
 
+
 // -------------------------------------------------------------------
 // 6. HTTP Callable: Accept Friend Request
 // -------------------------------------------------------------------
@@ -965,6 +976,7 @@ export const acceptFriendRequest = fitRpgOnCall(async (data, context) => {
     return { success: true };
 });
 
+
 // -------------------------------------------------------------------
 // 6b. HTTP Callable: Decline Friend Request
 // -------------------------------------------------------------------
@@ -999,6 +1011,40 @@ export const declineFriendRequest = fitRpgOnCall(async (data, context) => {
     return { success: true };
 });
 
+
+// -------------------------------------------------------------------
+// 6b2. HTTP Callable: Remove Friend (server-authoritative bidirectional)
+// -------------------------------------------------------------------
+export const removeFriend = fitRpgOnCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
+
+    const myUid = context.auth.uid;
+    const targetUid = String(data?.targetUid || "").trim();
+    if (!targetUid || myUid === targetUid) {
+        throw new functions.https.HttpsError("invalid-argument", "Invalid targetUid.");
+    }
+
+    const myRef = db.collection("users").doc(myUid);
+    const targetRef = db.collection("users").doc(targetUid);
+
+    await db.runTransaction(async (transaction) => {
+        const myDoc = await transaction.get(myRef);
+        const targetDoc = await transaction.get(targetRef);
+
+        if (myDoc.exists) {
+            const myFriends: string[] = Array.isArray(myDoc.data()?.friends) ? myDoc.data()!.friends : [];
+            transaction.update(myRef, { friends: myFriends.filter((id) => id !== targetUid) });
+        }
+        if (targetDoc.exists) {
+            const targetFriends: string[] = Array.isArray(targetDoc.data()?.friends) ? targetDoc.data()!.friends : [];
+            transaction.update(targetRef, { friends: targetFriends.filter((id) => id !== myUid) });
+        }
+    });
+
+    return { success: true };
+});
+
+// -------------------------------------------------------------------
 // -------------------------------------------------------------------
 // 6c. HTTP Callable: Accept Friend Duel
 // -------------------------------------------------------------------
@@ -1108,6 +1154,7 @@ export const declineFriendDuel = fitRpgOnCall(async (data, context) => {
 
     return { success: true };
 });
+
 
 // -------------------------------------------------------------------
 // 7. HTTP Callable: Join Team (queue join + 3v3 lobby invite accept)
@@ -1355,6 +1402,162 @@ export const equipItem = fitRpgOnCall(async (data, context) => {
 });
 
 // -------------------------------------------------------------------
+// 9b. HTTP Callable: Allocate Stat Point (Constellation Skill Tree)
+// -------------------------------------------------------------------
+export const allocateStatPoint = fitRpgOnCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
+
+    const uid = context.auth.uid;
+    const stat = String(data?.stat || "");
+    const userRef = db.collection("users").doc(uid);
+
+    const result = await db.runTransaction(async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists) throw new functions.https.HttpsError("not-found", "User not found.");
+        const userData = userDoc.data() || {};
+
+        const allocation = allocateStatPointUpdate(stat, userData);
+        if (!allocation.ok) {
+            if (allocation.reason === "invalid_stat") {
+                throw new functions.https.HttpsError("invalid-argument", "Invalid stat code.");
+            }
+            throw new functions.https.HttpsError("failed-precondition", "No stat points available.");
+        }
+
+        transaction.update(userRef, allocation.updates);
+        return {
+            success: true,
+            stat: allocation.stat,
+            statPoints: allocation.updates.statPoints,
+            newValue: allocation.newValue,
+        };
+    });
+
+    return result;
+});
+
+// -------------------------------------------------------------------
+// 9c. HTTP Callable: Deposit Gold to Clan Treasury
+// -------------------------------------------------------------------
+export const depositClanGold = fitRpgOnCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
+
+    const uid = context.auth.uid;
+    const userRef = db.collection("users").doc(uid);
+
+    const result = await db.runTransaction(async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists) throw new functions.https.HttpsError("not-found", "User not found.");
+        const userData = userDoc.data() || {};
+        const clanId = typeof userData.clanId === "string" ? userData.clanId : "";
+        if (!clanId) {
+            throw new functions.https.HttpsError("failed-precondition", "Join a clan before depositing gold.");
+        }
+
+        const clanRef = db.collection("clans").doc(clanId);
+        const clanDoc = await transaction.get(clanRef);
+        if (!clanDoc.exists) {
+            throw new functions.https.HttpsError("not-found", "Clan not found.");
+        }
+        const clanData = clanDoc.data() || {};
+        const members = Array.isArray(clanData.members) ? clanData.members : [];
+        if (!members.some((m: any) => m.id === uid)) {
+            throw new functions.https.HttpsError("permission-denied", "Not a clan member.");
+        }
+
+        const dep = computeClanTreasuryDeposit({
+            userGold: userData.gold,
+            treasuryGold: clanData.treasuryGold,
+            amount: data?.amount,
+        });
+        if (!dep.ok) {
+            if (dep.reason === "invalid_amount") {
+                throw new functions.https.HttpsError("invalid-argument", "Invalid deposit amount.");
+            }
+            throw new functions.https.HttpsError("failed-precondition", "Not enough gold.");
+        }
+
+        transaction.update(userRef, { gold: dep.nextUserGold });
+        transaction.update(clanRef, { treasuryGold: dep.nextTreasuryGold });
+
+        return {
+            success: true,
+            gold: dep.nextUserGold,
+            treasuryGold: dep.nextTreasuryGold,
+        };
+    });
+
+    return result;
+});
+
+// -------------------------------------------------------------------
+// 9d. HTTP Callable: Activate Clan Buff (Leader / Officer)
+// -------------------------------------------------------------------
+export const activateClanBuff = fitRpgOnCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
+
+    const uid = context.auth.uid;
+    const userRef = db.collection("users").doc(uid);
+
+    const result = await db.runTransaction(async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists) throw new functions.https.HttpsError("not-found", "User not found.");
+        const userData = userDoc.data() || {};
+        const clanId = typeof userData.clanId === "string" ? userData.clanId : "";
+        if (!clanId) {
+            throw new functions.https.HttpsError("failed-precondition", "Join a clan first.");
+        }
+
+        const clanRef = db.collection("clans").doc(clanId);
+        const clanDoc = await transaction.get(clanRef);
+        if (!clanDoc.exists) {
+            throw new functions.https.HttpsError("not-found", "Clan not found.");
+        }
+        const clanData = clanDoc.data() || {};
+        const members = Array.isArray(clanData.members) ? clanData.members : [];
+        const me = members.find((m: any) => m.id === uid);
+        if (!me) {
+            throw new functions.https.HttpsError("permission-denied", "Not a clan member.");
+        }
+
+        const activation = computeClanBuffActivation({
+            buffId: data?.buffId,
+            role: me.role,
+            treasuryGold: clanData.treasuryGold,
+            activeBuffs: clanData.activeBuffs,
+            nowMs: Date.now(),
+        });
+        if (!activation.ok) {
+            if (activation.reason === "forbidden") {
+                throw new functions.https.HttpsError("permission-denied", "Only Leaders and Officers can activate Guild Blessings.");
+            }
+            if (activation.reason === "invalid_buff") {
+                throw new functions.https.HttpsError("invalid-argument", "Unknown guild blessing.");
+            }
+            if (activation.reason === "insufficient_treasury") {
+                throw new functions.https.HttpsError("failed-precondition", "Not enough gold in Castle Treasury.");
+            }
+            throw new functions.https.HttpsError("already-exists", "This Guild Blessing is already active.");
+        }
+
+        transaction.update(clanRef, {
+            treasuryGold: activation.nextTreasuryGold,
+            activeBuffs: activation.nextActiveBuffs,
+        });
+
+        return {
+            success: true,
+            buffId: activation.buffId,
+            treasuryGold: activation.nextTreasuryGold,
+            activeBuffs: activation.nextActiveBuffs,
+            expiresAt: activation.expiresAt,
+        };
+    });
+
+    return result;
+});
+
+// -------------------------------------------------------------------
 // 10. HTTP Callable: Resolve PvE Battle
 // -------------------------------------------------------------------
 export const resolvePvEBattle = fitRpgOnCall(async (data, context) => {
@@ -1367,6 +1570,8 @@ export const resolvePvEBattle = fitRpgOnCall(async (data, context) => {
     
     const userRef = db.collection("users").doc(uid);
     let droppedItemId: string | null = null;
+    let finalXp = 0;
+    let finalGold = 0;
     
     await db.runTransaction(async (transaction) => {
         const userDoc = await transaction.get(userRef);
@@ -1374,6 +1579,14 @@ export const resolvePvEBattle = fitRpgOnCall(async (data, context) => {
         
         const userData = userDoc.data();
         if (!userData) return;
+
+        let clanBuffs = { xpMultiplier: 1.0, goldMultiplier: 1.0, warPowerBonus: 0.0 };
+        if (typeof userData.clanId === "string" && userData.clanId) {
+            const clanDoc = await transaction.get(db.collection("clans").doc(userData.clanId));
+            if (clanDoc.exists) {
+                clanBuffs = computeClanBuffMultipliers(clanDoc.data()?.activeBuffs, Date.now());
+            }
+        }
 
         // Rate limit: max 30 PvE resolves / hour
         const nowMs = Date.now();
@@ -1396,13 +1609,15 @@ export const resolvePvEBattle = fitRpgOnCall(async (data, context) => {
         };
         
         if (won) {
-            updates.gold = admin.firestore.FieldValue.increment(bossGold);
+            finalXp = Math.round(bossXp * clanBuffs.xpMultiplier);
+            finalGold = Math.round(bossGold * clanBuffs.goldMultiplier);
+            updates.gold = admin.firestore.FieldValue.increment(finalGold);
             
             const selectedClass = userData.selectedClass || "Archer";
             const { updates: progUpdates } = applyXpToProgression(
                 userData.progressions || {},
                 selectedClass,
-                bossXp,
+                finalXp,
                 userData
             );
             Object.assign(updates, progUpdates);
@@ -1441,7 +1656,7 @@ export const resolvePvEBattle = fitRpgOnCall(async (data, context) => {
         transaction.update(userRef, updates);
     });
     
-    return { success: true, droppedItemId: droppedItemId, won, xp: won ? bossXp : 0, gold: won ? bossGold : 0 };
+    return { success: true, droppedItemId: droppedItemId, won, xp: won ? finalXp : 0, gold: won ? finalGold : 0 };
 });
 
 // -------------------------------------------------------------------
@@ -1754,14 +1969,28 @@ export const awardActivityRewards = fitRpgOnCall(async (data, context) => {
         return { success: true, xp: 0, gold: 0 };
     }
 
+    const questId = typeof data.questId === "string" ? data.questId.trim().slice(0, 64) : "";
+    const isQuestClaim = (reason === "quest" || reason === "daily_quest" || reason.startsWith("quest_")) && questId.length > 0;
+
     const userRef = db.collection("users").doc(uid);
     let storyStageOut: number | undefined;
+    let finalXp = xp;
+    let finalGold = gold;
+    let claimedDayKey: string | undefined;
     await db.runTransaction(async (transaction) => {
         const userDoc = await transaction.get(userRef);
         if (!userDoc.exists) throw new functions.https.HttpsError("not-found", "User not found.");
         const userData = userDoc.data()!;
 
         const nowMs = Date.now();
+        let clanBuffs = { xpMultiplier: 1.0, goldMultiplier: 1.0, warPowerBonus: 0.0 };
+        if (typeof userData.clanId === "string" && userData.clanId) {
+            const clanDoc = await transaction.get(db.collection("clans").doc(userData.clanId));
+            if (clanDoc.exists) {
+                clanBuffs = computeClanBuffMultipliers(clanDoc.data()?.activeBuffs, nowMs);
+            }
+        }
+
         const windowStart = userData.activityRewardWindowStart?.toMillis
             ? userData.activityRewardWindowStart.toMillis()
             : Number(userData.activityRewardWindowStart || 0);
@@ -1773,7 +2002,6 @@ export const awardActivityRewards = fitRpgOnCall(async (data, context) => {
             throw new functions.https.HttpsError("resource-exhausted", "Activity reward rate limit reached.");
         }
 
-        const selectedClass = userData.selectedClass || "Archer";
         const updates: any = {
             activityRewardCount: count + 1,
             activityRewardWindowStart: count === 0
@@ -1781,15 +2009,34 @@ export const awardActivityRewards = fitRpgOnCall(async (data, context) => {
                 : (userData.activityRewardWindowStart || admin.firestore.Timestamp.now()),
             lastActivityRewardReason: reason,
         };
-        if (gold > 0) {
-            updates.gold = admin.firestore.FieldValue.increment(gold);
+
+        if (isQuestClaim) {
+            const dayKey = utcDayKey(nowMs);
+            const claimRes = computeDailyQuestClaim({
+                claimedDailyQuests: userData.claimedDailyQuests,
+                dayKey,
+                questId,
+            });
+            if (!claimRes.ok) {
+                throw new functions.https.HttpsError("already-exists", "Daily quest already claimed today.");
+            }
+            updates.claimedDailyQuests = claimRes.nextClaimed;
+            claimedDayKey = dayKey;
+        }
+
+        finalXp = Math.round(xp * clanBuffs.xpMultiplier);
+        finalGold = Math.round(gold * clanBuffs.goldMultiplier);
+
+        const selectedClass = userData.selectedClass || "Archer";
+        if (finalGold > 0) {
+            updates.gold = admin.firestore.FieldValue.increment(finalGold);
         }
         let progressions = { ...(userData.progressions || {}) };
-        if (xp > 0) {
+        if (finalXp > 0) {
             const { updates: progUpdates } = applyXpToProgression(
                 progressions,
                 selectedClass,
-                xp,
+                finalXp,
                 userData
             );
             Object.assign(updates, progUpdates);
@@ -1807,7 +2054,7 @@ export const awardActivityRewards = fitRpgOnCall(async (data, context) => {
         transaction.update(userRef, updates);
     });
 
-    return { success: true, xp, gold, storyStage: storyStageOut };
+    return { success: true, xp: finalXp, gold: finalGold, storyStage: storyStageOut, claimedDayKey };
 });
 
 // -------------------------------------------------------------------
@@ -1994,6 +2241,7 @@ export const fillTeammatesWithBots = fitRpgOnCall(async (data, context) => {
     return { success: true };
 });
 
+
 // -------------------------------------------------------------------
 // 14. HTTP Callable: Trigger Opponent Bot Fallback
 // -------------------------------------------------------------------
@@ -2138,11 +2386,14 @@ export const getLeaderboards = fitRpgOnCall(async (data, context) => {
                     const raw = d.data() || {};
                     return {
                         id: d.id,
-                        name: raw.name,
-                        emblem: raw.emblem,
-                        trophies: raw.trophies,
-                        totalReps: raw.totalReps,
-                        leaderId: raw.leaderId,
+                        name: raw.name || "Clan",
+                        description: raw.description || "",
+                        emblem: raw.emblem || "shield.fill",
+                        trophies: raw.trophies ?? 1000,
+                        totalReps: raw.totalReps ?? 0,
+                        level: raw.level ?? 1,
+                        xp: raw.xp ?? 0,
+                        leaderId: raw.leaderId || "",
                         members: (raw.members || []).map((m: any) => ({
                             id: m.id,
                             username: m.username,

@@ -263,7 +263,7 @@ class DungeonVM: ObservableObject {
                 self.xpEarned = result.xp
                 self.goldEarned = result.gold
                 if let id = result.droppedItemId,
-                   let item = EquipmentItem.findArmor(by: id) ?? EquipmentItem.findWeapon(by: id) {
+                   let item = EquipmentItem.findItem(by: id) {
                     self.droppedLoot = item
                 }
                 DailyQuestProgressStore.record(.dungeonRun)

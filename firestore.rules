@@ -7,7 +7,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // =====================================================
-    // WORKOUT TRACKER RULES (Do not touch)
+    // WORKOUT TRACKER RULES (synced with WorkoutTracker-repo 2026-11-18)
     // =====================================================
 
     // === Curated content (read-only) ===
@@ -22,20 +22,42 @@ service cloud.firestore {
 
     // === User-generated shared workouts ===
     match /shared_workouts/{workoutId} {
-      // Read: only approved workouts, OR your own doc (any status)
-      allow read: if (resource.data.status == "approved")
-                  || (request.auth != null
-                      && resource.data.creatorUid == request.auth.uid);
+      // Read: require authentication; only approved workouts, OR your own doc (any status)
+      allow read: if request.auth != null
+                  && ((resource.data.status == "approved")
+                      || (resource.data.creatorUid == request.auth.uid));
 
-      // Create: must be authed; creatorUid must equal own UID;
-      // must start as pending with zero reports; size limits on text.
+      // Create: must be authed; strict field allowlist; creatorUid must equal own UID;
+      // must start as pending with zero reports; consistent title/name and bounded exercises list.
       allow create: if request.auth != null
+                    && request.resource.data.keys().hasOnly([
+                         "name", "icon", "folderName", "exercises",
+                         "title", "description", "creatorUid", "status",
+                         "reportCount", "moderationReason", "createdAt", "language"
+                       ])
                     && request.resource.data.creatorUid == request.auth.uid
                     && request.resource.data.status == "pending"
                     && request.resource.data.reportCount == 0
+                    && request.resource.data.moderationReason is string
+                    && request.resource.data.moderationReason == ""
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.name.size() <= 200
                     && request.resource.data.title is string
-                    && request.resource.data.title.size() > 0
-                    && request.resource.data.title.size() <= 200
+                    && request.resource.data.title == request.resource.data.name
+                    && request.resource.data.icon is string
+                    && request.resource.data.icon.size() > 0
+                    && request.resource.data.icon.size() <= 100
+                    && request.resource.data.exercises is list
+                    && request.resource.data.exercises.size() > 0
+                    && request.resource.data.exercises.size() <= 200
+                    && (!("folderName" in request.resource.data)
+                        || request.resource.data.folderName == null
+                        || (request.resource.data.folderName is string
+                            && request.resource.data.folderName.size() <= 100))
+                    && (!("language" in request.resource.data)
+                        || (request.resource.data.language is string
+                            && request.resource.data.language.size() <= 16))
                     && (!("description" in request.resource.data)
                         || (request.resource.data.description is string
                             && request.resource.data.description.size() <= 2000));
@@ -54,7 +76,16 @@ service cloud.firestore {
                     && request.resource.data.reporterUid == request.auth.uid
                     && (
                       // WorkoutTracker shared-workout reports
-                      (request.resource.data.workoutId is string
+                      (request.resource.data.keys().hasOnly([
+                         "workoutId", "reporterUid", "reason", "details", "status", "createdAt"
+                       ])
+                       && request.resource.data.status == "pending"
+                       && request.resource.data.workoutId is string
+                       && request.resource.data.workoutId.size() > 0
+                       && request.resource.data.workoutId.size() <= 128
+                       && !request.resource.data.workoutId.matches('.*/.*')
+                       && reportId == request.resource.data.workoutId + "_" + request.auth.uid
+                       && exists(/databases/$(database)/documents/shared_workouts/$(request.resource.data.workoutId))
                        && request.resource.data.reason in
 ["spam", "hate", "harassment", "sexual", "violence", "dangerous", "other"]
                        && (!("details" in request.resource.data)
@@ -64,17 +95,28 @@ service cloud.firestore {
                       // FitRPG player reports
                       (request.resource.data.app == "fitrpg"
                        && request.resource.data.targetUid is string
+                       && request.resource.data.targetUid.size() > 0
+                       && request.resource.data.targetUid.size() <= 128
+                       && request.resource.data.targetUid != request.auth.uid
                        && request.resource.data.reason is string
                        && request.resource.data.reason.size() > 0
                        && request.resource.data.reason.size() <= 200
-                       && request.resource.data.keys().hasAll(['reporterUid', 'targetUid', 'reason', 'createdAt', 'app']))
+                       && request.resource.data.keys().hasAll(['reporterUid', 'targetUid', 'reason', 'createdAt', 'app'])
+                       && request.resource.data.keys().hasOnly(['reporterUid', 'targetUid', 'reason', 'createdAt', 'app']))
                     );
       allow read, update, delete: if false;
     }
 
-    // === Per-user blocked list ===
+    // === Per-user blocked list (WorkoutTracker + FitRPG) ===
     match /users/{userId}/blocked/{blockedUid} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
+                            && blockedUid != userId
+                            && blockedUid.size() > 0
+                            && blockedUid.size() <= 128
+                            && request.resource.data.keys().hasOnly(["blockedAt"]);
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
     // =====================================================
@@ -140,7 +182,8 @@ service cloud.firestore {
         'baseStrength', 'baseDexterity', 'baseIntelligence', 'baseVitality',
         'equippedWeaponId', 'equippedArmorId', 'equippedRingId', 'equippedAmuletId',
         'lastEnergyRegenAt', 'pendingEnergyCharges',
-        'lastTrainEnergyDay', 'trainEnergyAwardedToday'
+        'lastTrainEnergyDay', 'trainEnergyAwardedToday',
+        'claimedDailyQuests'
       ].toSet();
     }
 
@@ -242,17 +285,11 @@ service cloud.firestore {
         allow create, update: if isSignedIn();
       }
 
-      // FitRPG UGC block list — owner only; cannot block self.
-      match /blocked/{targetUid} {
-        allow read, delete: if isUser(userId);
-        allow create, update: if isUser(userId)
-                              && targetUid != request.auth.uid
-                              && targetUid.size() > 0;
-      }
+      // UGC block list is governed by the shared /users/{userId}/blocked/{blockedUid} rule above.
 
       // All other subcollections: owner only (Stepper workouts, etc.)
       match /{subcollection}/{document=**} {
-        allow read, write: if isUser(userId);
+        allow read, write: if isUser(userId) && subcollection != 'blocked';
       }
     }
 
@@ -266,7 +303,10 @@ service cloud.firestore {
                     && request.resource.data.trophies is int
                     && request.resource.data.trophies == 1000
                     && request.resource.data.memberIds is list
-                    && request.auth.uid in request.resource.data.memberIds;
+                    && request.auth.uid in request.resource.data.memberIds
+                    && (!('treasuryGold' in request.resource.data)
+                        || (request.resource.data.treasuryGold is int
+                            && request.resource.data.treasuryGold == 0));
 
       allow update: if isSignedIn()
                     && (
@@ -276,7 +316,7 @@ service cloud.firestore {
                     && request.resource.data.trophies == resource.data.trophies
                     && request.resource.data.diff(resource.data)
                          .affectedKeys()
-                         .hasOnly(['totalReps', 'members', 'description', 'emblem', 'name', 'memberIds', 'treasuryGold', 'leaderId'])
+                         .hasOnly(['totalReps', 'members', 'description', 'emblem', 'name', 'memberIds', 'leaderId'])
                     && (
                       // leaderId may only change to a remaining member, and only by the current leader
                       // (covers leave-as-leader handoff and promote-to-leader).

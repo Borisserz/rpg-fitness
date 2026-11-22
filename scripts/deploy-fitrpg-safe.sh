@@ -10,7 +10,8 @@ echo "Building functions..." >&2
 npm --prefix functions run build
 
 ONLY=$(python3 - <<'PY'
-# FitRPG never calls deleteAccount (recursive wipe). Kept only for Food/Workout.
+# FitRPG never calls deleteAccount (recursive wipe) and never overwrites Workout/Food shared AI functions.
+# Keep shared function names in functions/src/index.ts only as deletion guards, do NOT deploy them from here.
 exports = [
 "matchmakeClanWar","cancelClanWarSearch","processClanWarPhases","recordClanWarAttack",
 "attackWorldBoss","processWorldBossCycle",
@@ -18,9 +19,9 @@ exports = [
 "acceptFriendRequest","declineFriendRequest","acceptFriendDuel","declineFriendDuel",
 "joinTeam","matchWithOpponent",
 "equipItem","purchaseItem","resolvePvEBattle","resolvePvPBattle","awardActivityRewards","adjustEnergy","fillScreenshotWallet",
+"allocateStatPoint","removeFriend","depositClanGold","activateClanBuff",
 "cleanupFitRPGAccount","onMatchmakingTicketCreated",
-"fillTeammatesWithBots","triggerOpponentBotFallback","getLeaderboards",
-"vertexProxy","imageProxy","deleteAccount","moderateSharedWorkout","onReportCreated"
+"fillTeammatesWithBots","triggerOpponentBotFallback","getLeaderboards"
 ]
 print(",".join(f"functions:{n}" for n in exports))
 PY

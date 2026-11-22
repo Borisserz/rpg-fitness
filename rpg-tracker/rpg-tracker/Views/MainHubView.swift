@@ -981,7 +981,7 @@ struct DailyQuestsSection: View {
                         progress: progress,
                         index: idx,
                         animated: animated,
-                        isClaimed: DailyQuestProgressStore.isClaimed(questId: quest.id),
+                        isClaimed: DailyQuestProgressStore.isClaimed(questId: quest.id, character: character),
                         canClaim: DailyQuestEngine.canClaim(quest, character: character),
                         currentCount: DailyQuestEngine.currentCount(for: quest),
                         onClaim: {

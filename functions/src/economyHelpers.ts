@@ -167,6 +167,7 @@ export function applyXpToProgression(
   updates.progressions = next;
 
   if (levelsGained > 0) {
+    updates.currentLevel = classProg.level;
     updates.statPoints = (userData.statPoints || 0) + earnedStatPoints;
     const newMax = (userData.maxEnergy || 100) + levelsGained * 5;
     updates.maxEnergy = newMax;
@@ -257,6 +258,168 @@ export const FITRPG_USER_FIELD_KEYS = [
   "lastHealthSyncDate",
   "lastTrainEnergyDay",
   "trainEnergyAwardedToday",
+  "claimedDailyQuests",
   "progressions",
   "fcmToken",
 ] as const;
+
+const STAT_FIELD_BY_CODE: Record<string, "baseStrength" | "baseDexterity" | "baseIntelligence" | "baseVitality"> = {
+  STR: "baseStrength",
+  DEX: "baseDexterity",
+  INT: "baseIntelligence",
+  VIT: "baseVitality",
+};
+
+export function allocateStatPointUpdate(
+  stat: unknown,
+  userData: {
+    statPoints?: unknown;
+    baseStrength?: unknown;
+    baseDexterity?: unknown;
+    baseIntelligence?: unknown;
+    baseVitality?: unknown;
+  }
+):
+  | { ok: true; stat: string; field: string; newValue: number; updates: Record<string, number> }
+  | { ok: false; reason: "invalid_stat" | "no_points" } {
+  const code = String(stat || "").trim().toUpperCase();
+  const field = STAT_FIELD_BY_CODE[code];
+  if (!field) {
+    return { ok: false, reason: "invalid_stat" };
+  }
+  const currentPoints = Math.max(0, Math.floor(Number(userData.statPoints) || 0));
+  if (currentPoints <= 0) {
+    return { ok: false, reason: "no_points" };
+  }
+  const currentStat = Math.max(10, Math.floor(Number((userData as any)[field]) || 10));
+  const newValue = currentStat + 1;
+  return {
+    ok: true,
+    stat: code,
+    field,
+    newValue,
+    updates: {
+      statPoints: currentPoints - 1,
+      [field]: newValue,
+    },
+  };
+}
+
+export function computeDailyQuestClaim(opts: {
+  claimedDailyQuests: Record<string, unknown> | undefined | null;
+  dayKey: string;
+  questId: unknown;
+}):
+  | { ok: true; nextClaimed: Record<string, string[]> }
+  | { ok: false; reason: "invalid_quest" | "already_claimed" } {
+  const questId = String(opts.questId || "").trim().slice(0, 64);
+  if (!questId) {
+    return { ok: false, reason: "invalid_quest" };
+  }
+  const rawList = opts.claimedDailyQuests?.[opts.dayKey];
+  const existing = Array.isArray(rawList)
+    ? rawList.map((id) => String(id)).filter(Boolean)
+    : [];
+  if (existing.includes(questId)) {
+    return { ok: false, reason: "already_claimed" };
+  }
+  return {
+    ok: true,
+    nextClaimed: {
+      [opts.dayKey]: [...existing, questId],
+    },
+  };
+}
+
+export function computeClanTreasuryDeposit(opts: {
+  userGold: unknown;
+  treasuryGold: unknown;
+  amount: unknown;
+}):
+  | { ok: true; amount: number; nextUserGold: number; nextTreasuryGold: number }
+  | { ok: false; reason: "invalid_amount" | "insufficient_gold" } {
+  const amount = Math.floor(Number(opts.amount));
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 50000) {
+    return { ok: false, reason: "invalid_amount" };
+  }
+  const userGold = Math.max(0, Math.floor(Number(opts.userGold) || 0));
+  if (userGold < amount) {
+    return { ok: false, reason: "insufficient_gold" };
+  }
+  const treasuryGold = Math.max(0, Math.floor(Number(opts.treasuryGold) || 0));
+  return {
+    ok: true,
+    amount,
+    nextUserGold: userGold - amount,
+    nextTreasuryGold: treasuryGold + amount,
+  };
+}
+
+export const CLAN_BUFF_DURATION_MS = 24 * 60 * 60 * 1000;
+
+export const CLAN_BUFF_CATALOG = {
+  xp_surge: { cost: 500, durationMs: CLAN_BUFF_DURATION_MS },
+  gold_rush: { cost: 500, durationMs: CLAN_BUFF_DURATION_MS },
+  war_valor: { cost: 800, durationMs: CLAN_BUFF_DURATION_MS },
+} as const;
+
+export type ClanBuffId = keyof typeof CLAN_BUFF_CATALOG;
+
+export function computeClanBuffActivation(opts: {
+  buffId: unknown;
+  role: unknown;
+  treasuryGold: unknown;
+  activeBuffs: Record<string, unknown> | undefined | null;
+  nowMs: number;
+}):
+  | { ok: true; buffId: ClanBuffId; cost: number; expiresAt: number; nextTreasuryGold: number; nextActiveBuffs: Record<string, number> }
+  | { ok: false; reason: "invalid_buff" | "forbidden" | "insufficient_treasury" | "already_active" } {
+  const role = String(opts.role || "");
+  if (role !== "Leader" && role !== "Officer") {
+    return { ok: false, reason: "forbidden" };
+  }
+  const buffId = String(opts.buffId || "") as ClanBuffId;
+  const spec = CLAN_BUFF_CATALOG[buffId];
+  if (!spec) {
+    return { ok: false, reason: "invalid_buff" };
+  }
+  const treasury = Math.max(0, Math.floor(Number(opts.treasuryGold) || 0));
+  if (treasury < spec.cost) {
+    return { ok: false, reason: "insufficient_treasury" };
+  }
+  const nextActiveBuffs: Record<string, number> = {};
+  for (const [k, v] of Object.entries(opts.activeBuffs || {})) {
+    const exp = Number(v);
+    if (Number.isFinite(exp) && exp > opts.nowMs && k in CLAN_BUFF_CATALOG) {
+      nextActiveBuffs[k] = exp;
+    }
+  }
+  if ((nextActiveBuffs[buffId] || 0) > opts.nowMs) {
+    return { ok: false, reason: "already_active" };
+  }
+  const expiresAt = opts.nowMs + spec.durationMs;
+  nextActiveBuffs[buffId] = expiresAt;
+  return {
+    ok: true,
+    buffId,
+    cost: spec.cost,
+    expiresAt,
+    nextTreasuryGold: treasury - spec.cost,
+    nextActiveBuffs,
+  };
+}
+
+export function computeClanBuffMultipliers(
+  activeBuffs: Record<string, unknown> | undefined | null,
+  nowMs: number
+): { xpMultiplier: number; goldMultiplier: number; warPowerBonus: number } {
+  const isActive = (key: ClanBuffId): boolean => {
+    const exp = Number(activeBuffs?.[key]);
+    return Number.isFinite(exp) && exp > nowMs;
+  };
+  return {
+    xpMultiplier: isActive("xp_surge") ? 1.2 : 1.0,
+    goldMultiplier: isActive("gold_rush") ? 1.2 : 1.0,
+    warPowerBonus: isActive("war_valor") ? 0.15 : 0.0,
+  };
+}

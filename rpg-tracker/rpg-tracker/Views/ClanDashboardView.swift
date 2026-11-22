@@ -557,7 +557,7 @@ struct ActiveClanView: View {
                 // Castle Modules
                 ClanTreasuryCard(clan: clan, viewModel: viewModel)
                 
-                ClanBuffsCard(clan: clan)
+                ClanBuffsCard(clan: clan, viewModel: viewModel)
                 
                 ClanRaidBossCard(clan: clan)
                 
@@ -963,6 +963,9 @@ struct LeaderboardListView: View {
                     LeaderboardTabBtn(title: "CLANS", id: "clans", activeId: viewModel.leaderboardType) {
                         viewModel.leaderboardType = "clans"
                     }
+                    LeaderboardTabBtn(title: "FRIENDS", id: "friends", activeId: viewModel.leaderboardType) {
+                        viewModel.leaderboardType = "friends"
+                    }
                     
                     ForEach(CharacterClass.allCases) { cls in
                         LeaderboardTabBtn(title: cls.rawValue.uppercased(), id: cls.rawValue, activeId: viewModel.leaderboardType) {
@@ -1177,9 +1180,12 @@ struct LeaderboardListView: View {
         }
         .onAppear {
             isLoading = true
-            FirebaseService.shared.fetchLeaderboards()
+            FirebaseService.shared.fetchLeaderboards(for: ["global", "pvp_1v1", "clans", "Archer", "Mage", "Swordsman", "Healer"])
         }
         .onReceive(FirebaseService.shared.$leaderboards) { _ in
+            isLoading = false
+        }
+        .onReceive(FirebaseService.shared.$leaderboardClans) { _ in
             isLoading = false
         }
     }
@@ -1246,319 +1252,6 @@ struct RankIndicator: View {
         }
     }
 }
-struct FriendsSocialView: View {
-    @Binding var currentTab: Int
-    @ObservedObject var firebaseService = FirebaseService.shared
-    @State private var searchName: String = ""
-    @State private var toastMsg: String? = nil
-    @State private var isErrorToast: Bool = false
-    
-    // Duel sheet state
-    @State private var selectedFriendForBattle: String? = nil
-    @State private var playerClassForBattle: CharacterClass = .swordsman
-    @State private var friendClassForBattle: CharacterClass = .swordsman
-    
-    var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(spacing: 20) {
-#if DEBUG
-                    // Legacy username add — DEBUG only; production uses Friends tab search + friend requests.
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("ADD NEW FIT ALLY")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundColor(Theme.textSecondary)
-                            .tracking(1.5)
-                        
-                        HStack(spacing: 12) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "magnifyingglass")
-                                    .foregroundColor(Theme.textMuted)
-                                
-                                TextField("Enter username...", text: $searchName)
-                                    .foregroundColor(Theme.textPrimary)
-                                    .font(.subheadline)
-                            }
-                            .padding()
-                            .background(Theme.secondaryCard.opacity(0.6))
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Theme.border, lineWidth: 1)
-                            )
-                            
-                            Button(action: performAddFriend) {
-                                Text("ADD")
-                                    .font(.system(size: 11, weight: .black, design: .monospaced))
-                                    .foregroundColor(.black)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 14)
-                                    .background(firebaseService.currentCharacter?.selectedClass.themeColor ?? Theme.primary)
-                                    .cornerRadius(12)
-                                    .glow(color: (firebaseService.currentCharacter?.selectedClass.themeColor ?? Theme.primary).opacity(0.35), radius: 6)
-                            }
-                            .disabled(searchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .buttonStyle(TactileButtonStyle())
-                        }
-                    }
-                    .padding(18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18)
-                            .fill(Theme.cardBackground.opacity(0.85))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                            .stroke(LinearGradient(
-                                colors: [Color.white.opacity(0.12), Color.clear],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ), lineWidth: 1)
-                    )
-                    .padding(.horizontal)
-                    .padding(.top, 16)
-#endif
-                    
-                    // Friends List Header
-                    HStack {
-                        Text("MY FRIENDS (\(firebaseService.friends.count))")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundColor(Theme.textSecondary)
-                            .tracking(1.5)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    
-                    // Friends List
-                    if firebaseService.friends.isEmpty {
-                        VStack(spacing: 16) {
-                            Image(systemName: "person.badge.plus")
-                                .font(.system(size: 48))
-                                .foregroundColor(Theme.textMuted)
-                            
-                            Text("YOUR FRIENDS LIST IS EMPTY")
-                                .font(.system(.subheadline, design: .monospaced))
-                                .foregroundColor(Theme.textSecondary)
-                            
-                            Text("Invite companions to perform exercises together and double your damage output!")
-                                .font(.caption2)
-                                .foregroundColor(Theme.textMuted)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
-                        }
-                        .padding(.top, 60)
-                    } else {
-                        VStack(spacing: 12) {
-                            ForEach(firebaseService.friends, id: \.self) { name in
-                                let cls = getFriendClass(for: name)
-                                let lvl = getFriendLevel(for: name)
-                                let isOnline = abs(name.hashValue) % 2 == 0
-                                
-                                HStack(spacing: 14) {
-                                    // Status & Avatar Circle
-                                    ZStack(alignment: .bottomTrailing) {
-                                        Circle()
-                                            .fill(cls.themeColor.opacity(0.15))
-                                            .frame(width: 44, height: 44)
-                                            .overlay(
-                                                Image(systemName: "person.fill")
-                                                    .foregroundColor(cls.themeColor)
-                                            )
-                                            .glow(color: cls.themeColor.opacity(0.35), radius: 5)
-                                        
-                                        Circle()
-                                            .fill(isOnline ? Theme.success : Theme.textMuted)
-                                            .frame(width: 12, height: 12)
-                                            .overlay(Circle().stroke(Theme.cardBackground, lineWidth: 2))
-                                            .glow(color: isOnline ? Theme.success.opacity(0.4) : Color.clear, radius: 2)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(name)
-                                            .font(.system(.subheadline, design: .default))
-                                            .fontWeight(.black)
-                                            .foregroundColor(Theme.textPrimary)
-                                        
-                                        HStack(spacing: 8) {
-                                            Text("LVL \(lvl)")
-                                                .font(.system(size: 9, design: .monospaced))
-                                                .foregroundColor(cls.themeColor)
-                                                .fontWeight(.bold)
-                                            
-                                            Text("•")
-                                                .font(.caption2)
-                                                .foregroundColor(Theme.textMuted)
-                                            
-                                            Text(cls.rawValue.uppercased())
-                                                .font(.system(size: 9, design: .monospaced))
-                                                .foregroundColor(Theme.textSecondary)
-                                        }
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    HStack(spacing: 8) {
-                                        // Battle invite trigger
-                                        Button(action: {
-                                            // Initialize battle preparation class selections
-                                            playerClassForBattle = firebaseService.currentCharacter?.selectedClass ?? .swordsman
-                                            friendClassForBattle = cls
-                                            selectedFriendForBattle = name
-                                        }) {
-                                            Text("BATTLE")
-                                                .font(.system(size: 9, weight: .black, design: .monospaced))
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                                .background(Theme.primary.opacity(0.15))
-                                                .foregroundColor(Theme.primary)
-                                                .cornerRadius(8)
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 8)
-                                                        .stroke(Theme.primary.opacity(0.35), lineWidth: 1)
-                                                )
-                                        }
-                                        .buttonStyle(TactileButtonStyle())
-                                        
-                                        // Remove action
-                                        Button(action: {
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                                firebaseService.removeFriend(name: name)
-                                                showToast("Removed \(name) from allies.", isError: false)
-                                            }
-                                        }) {
-                                            Image(systemName: "trash")
-                                                .font(.system(size: 11, weight: .bold))
-                                                .foregroundColor(Theme.danger.opacity(0.8))
-                                                .padding(8)
-                                                .background(Theme.danger.opacity(0.08))
-                                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        }
-                                        .buttonStyle(TactileButtonStyle())
-                                    }
-                                }
-                                .padding()
-                                .background(Theme.cardBackground.opacity(0.85))
-                                .cornerRadius(16)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Theme.border, lineWidth: 1)
-                                )
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-                    
-                    Spacer()
-                        .frame(height: 100) // tab bar offset
-                }
-            }
-            
-            // Inline Floating Toast notifications
-            if let msg = toastMsg {
-                VStack {
-                    Spacer()
-                    
-                    HStack(spacing: 10) {
-                        Image(systemName: isErrorToast ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                            .foregroundColor(isErrorToast ? Theme.danger : Theme.success)
-                        Text(msg)
-                            .font(.system(.caption, design: .monospaced))
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.85))
-                    .cornerRadius(20)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(isErrorToast ? Theme.danger.opacity(0.4) : Theme.success.opacity(0.4), lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.3), radius: 6, x: 0, y: 3)
-                    .padding(.bottom, 40)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(100)
-                }
-            }
-        }
-        .sheet(isPresented: Binding(
-            get: { selectedFriendForBattle != nil },
-            set: { if !$0 { selectedFriendForBattle = nil } }
-        )) {
-            if let friendName = selectedFriendForBattle {
-                FriendBattlePrepSheet(
-                    friendName: friendName,
-                    playerClass: $playerClassForBattle,
-                    friendClass: $friendClassForBattle,
-                    onStart: {
-                        triggerBattleInvite(friendName: friendName)
-                    }
-                )
-            }
-        }
-    }
-    
-    #if DEBUG
-    private func performAddFriend() {
-        let name = searchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        
-        let success = firebaseService.addFriend(name: name)
-        if success {
-            showToast("Successfully added \(name) as ally!", isError: false)
-            searchName = ""
-        } else {
-            showToast("Ally \(name) is already in your friends list.", isError: true)
-        }
-    }
-    #endif
-    
-    private func triggerBattleInvite(friendName: String) {
-        showToast("Challenging \(friendName) to a 1v1 Duel...", isError: false)
-        firebaseService.startFriendDuel(
-            playerClass: playerClassForBattle,
-            friendName: friendName,
-            friendClass: friendClassForBattle
-        ) { success in
-            if success {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                    currentTab = 1 // Switch automatically to PvP Arena tab
-                }
-            } else {
-                let msg = MultiplayerService.shared.matchmakingError
-                    ?? "Couldn't challenge \(friendName). Try again when they're online."
-                showToast(msg, isError: true)
-            }
-        }
-    }
-    
-    private func showToast(_ message: String, isError: Bool) {
-        toastMsg = message
-        isErrorToast = isError
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if toastMsg == message {
-                withAnimation {
-                    toastMsg = nil
-                }
-            }
-        }
-    }
-    
-    private func getFriendClass(for name: String) -> CharacterClass {
-        if name.lowercased().contains("healer") { return .healer }
-        if name.lowercased().contains("mage") { return .mage }
-        if name.lowercased().contains("archer") { return .archer }
-        if name.lowercased().contains("swordsman") || name.lowercased().contains("knight") { return .swordsman }
-        let choices: [CharacterClass] = [.archer, .mage, .swordsman, .healer]
-        let index = abs(name.hashValue) % choices.count
-        return choices[index]
-    }
-    
-    private func getFriendLevel(for name: String) -> Int {
-        return 5 + (abs(name.hashValue) % 15)
-    }
-}
-
 struct ClanDashboardView_Previews: PreviewProvider {
     static var previews: some View {
         ClanDashboardView(currentTab: .constant(3))
@@ -1813,7 +1506,16 @@ struct ClanTreasuryCard: View {
 
 struct ClanBuffsCard: View {
     let clan: Clan
-    
+    @ObservedObject var viewModel: ClanVM
+    @State private var activatingBuff: ClanBuffType? = nil
+    @State private var feedbackText: String? = nil
+
+    private var canActivate: Bool {
+        guard let myId = FirebaseService.shared.currentCharacter?.id,
+              let me = clan.members.first(where: { $0.id == myId }) else { return false }
+        return me.role == .leader || me.role == .officer
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -1825,36 +1527,44 @@ struct ClanBuffsCard: View {
                         .foregroundColor(Theme.primary)
                         .font(.body.weight(.bold))
                 }
-                
+
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("GUILD BUFFS")
+                    Text("GUILD BLESSINGS")
                         .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(.black)
                         .foregroundColor(.white)
                         .tracking(1)
-                    Text("Hall flavor (not combat bonuses)")
+                    Text("24h server-wide clan buffs from Castle Treasury")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Theme.textSecondary)
                 }
                 Spacer()
             }
-            
+
             VStack(spacing: 8) {
-                guildBuffRow(icon: "bolt.fill", iconColor: Theme.primary, title: "CRUSADER'S EXP", value: "FLAVOR", active: false)
-                guildBuffRow(icon: "flame.fill", iconColor: Theme.warning, title: "VALOROUS SWORD", value: "FLAVOR", active: false)
-                guildBuffRow(
-                    icon: "lock.fill",
-                    iconColor: Theme.textMuted,
-                    title: "CELESTIAL REGEN",
-                    value: "COMING LATER",
-                    active: false
-                )
+                ForEach(ClanBuffType.allCases) { buff in
+                    let active = clan.isBuffActive(buff)
+                    let remaining = clan.buffRemainingText(buff)
+                    let affordable = (clan.treasuryGold ?? 0) >= buff.cost
+                    guildBuffRow(
+                        buff: buff,
+                        active: active,
+                        remaining: remaining,
+                        affordable: affordable
+                    )
+                }
             }
-            
-            Text("Hall blessings are cosmetic for now — they do not change XP, damage, or healing.")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundColor(Theme.warning)
-                .fixedSize(horizontal: false, vertical: true)
+
+            if let feedbackText {
+                Text(feedbackText)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.success)
+            } else if !canActivate {
+                Text("Leaders & Officers can activate blessings using Treasury Gold.")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
         .background(
@@ -1872,27 +1582,87 @@ struct ClanBuffsCard: View {
         .shadow(color: Theme.primary.opacity(0.18), radius: 10, y: 4)
         .padding(.horizontal)
     }
-    
-    private func guildBuffRow(icon: String, iconColor: Color, title: String, value: String, active: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundColor(iconColor)
+
+    private func iconColor(for buff: ClanBuffType) -> Color {
+        switch buff {
+        case .xpSurge: return Theme.primary
+        case .goldRush: return Theme.healerColor
+        case .warValor: return Theme.danger
+        }
+    }
+
+    private func guildBuffRow(buff: ClanBuffType, active: Bool, remaining: String?, affordable: Bool) -> some View {
+        let color = iconColor(for: buff)
+        return HStack(spacing: 10) {
+            Image(systemName: buff.icon)
+                .foregroundColor(color)
                 .font(.caption.weight(.bold))
                 .frame(width: 22)
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundColor(active ? .white : Theme.textMuted)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(buff.title)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                    Text(buff.bonusLabel)
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundColor(color)
+                }
+                Text(buff.description)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(2)
+            }
+
             Spacer()
-            Text(value)
-                .font(.system(size: 10, weight: .black, design: .monospaced))
-                .foregroundColor(active ? Theme.success : Theme.textMuted)
+
+            if active, let remaining {
+                Text("ACTIVE · \(remaining)")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .foregroundColor(Theme.success)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Theme.success.opacity(0.14))
+                    .cornerRadius(6)
+            } else if canActivate {
+                Button(action: {
+                    activatingBuff = buff
+                    feedbackText = nil
+                    viewModel.activateBuff(buff) { ok, msg in
+                        activatingBuff = nil
+                        if ok { feedbackText = msg }
+                    }
+                }) {
+                    if activatingBuff == buff {
+                        ProgressView()
+                            .tint(.black)
+                            .scaleEffect(0.75)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                    } else {
+                        Text("\(buff.cost) G")
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .foregroundColor(affordable ? .black : Theme.textMuted)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(affordable ? color : Color.white.opacity(0.06))
+                            .cornerRadius(6)
+                    }
+                }
+                .disabled(!affordable || activatingBuff != nil)
+                .buttonStyle(TactileButtonStyle())
+            } else {
+                Text("\(buff.cost) G")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.textMuted)
+            }
         }
         .padding(10)
-        .background(active ? Color.white.opacity(0.07) : Color.white.opacity(0.03))
+        .background(active ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
         .cornerRadius(10)
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(active ? iconColor.opacity(0.35) : Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(active ? color.opacity(0.45) : Color.white.opacity(0.06), lineWidth: 1)
         )
     }
 }

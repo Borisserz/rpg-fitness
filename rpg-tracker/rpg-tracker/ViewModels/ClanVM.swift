@@ -53,13 +53,23 @@ class ClanVM: ObservableObject {
                 self.leaderboardPlayers = dict[self.leaderboardType] ?? []
             }
             .store(in: &cancellables)
+
+        firebaseService.$leaderboardClans
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] clans in
+                guard let self = self, !clans.isEmpty else { return }
+                self.leaderboardClans = clans
+            }
+            .store(in: &cancellables)
             
         $leaderboardType
             .receive(on: DispatchQueue.main)
             .sink { [weak self] lType in
                 guard let self = self else { return }
                 // Show cached data immediately if available
-                self.leaderboardPlayers = self.firebaseService.leaderboards[lType] ?? []
+                if lType != "clans" {
+                    self.leaderboardPlayers = self.firebaseService.leaderboards[lType] ?? []
+                }
                 // Fetch fresh data from server for this type
                 self.firebaseService.fetchLeaderboards(for: [lType])
             }
@@ -101,6 +111,10 @@ class ClanVM: ObservableObject {
     
     func depositGold(amount: Int) {
         firebaseService.depositClanGold(amount: amount)
+    }
+
+    func activateBuff(_ buff: ClanBuffType, completion: @escaping (Bool, String?) -> Void) {
+        firebaseService.activateClanBuff(buff, completion: completion)
     }
     
     func changeMemberRole(memberId: String, newRole: ClanRole) {

@@ -121,15 +121,14 @@ struct DailyQuestEngine {
     }
 
     static func canClaim(_ quest: DailyQuest, character: Character) -> Bool {
-        isComplete(quest, character: character) && !DailyQuestProgressStore.isClaimed(questId: quest.id)
+        isComplete(quest, character: character) && !DailyQuestProgressStore.isClaimed(questId: quest.id, character: character)
     }
 
     @MainActor
     static func claim(_ quest: DailyQuest) {
         guard let character = FirebaseService.shared.currentCharacter else { return }
         guard canClaim(quest, character: character) else { return }
-        FirebaseService.shared.awardBattleRewards(xp: quest.xpReward, gold: quest.goldReward, reason: "quest")
-        DailyQuestProgressStore.markClaimed(questId: quest.id)
+        FirebaseService.shared.claimDailyQuest(quest)
     }
 }
 
@@ -168,8 +167,21 @@ enum DailyQuestProgressStore {
         return counts[type.rawValue] ?? 0
     }
 
-    static func isClaimed(questId: String) -> Bool {
+    static func utcDayKey(for date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func isClaimed(questId: String, character: Character? = nil) -> Bool {
         ensureToday()
+        if let serverIds = character?.claimedDailyQuests?[utcDayKey()],
+           serverIds.contains(questId) {
+            return true
+        }
         return (UserDefaults.standard.stringArray(forKey: claimedKey) ?? []).contains(questId)
     }
 
@@ -180,6 +192,14 @@ enum DailyQuestProgressStore {
             claimed.append(questId)
             UserDefaults.standard.set(claimed, forKey: claimedKey)
         }
+        notifyChange()
+    }
+
+    static func unmarkClaimed(questId: String) {
+        ensureToday()
+        var claimed = UserDefaults.standard.stringArray(forKey: claimedKey) ?? []
+        claimed.removeAll { $0 == questId }
+        UserDefaults.standard.set(claimed, forKey: claimedKey)
         notifyChange()
     }
 

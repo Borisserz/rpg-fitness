@@ -184,7 +184,7 @@ class BattleEngine: ObservableObject {
                             return
                         }
                         self.raidRewardSettlement = .settled(xp: result.xp, gold: result.gold)
-                        if let id = result.droppedItemId, let item = EquipmentItem.findArmor(by: id) ?? EquipmentItem.findWeapon(by: id) {
+                        if let id = result.droppedItemId, let item = EquipmentItem.findItem(by: id) {
                             self.droppedLoot = item
                         }
                     }

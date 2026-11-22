@@ -194,6 +194,13 @@ struct EquipmentItem: Codable, Identifiable, Hashable {
     static func findAmulet(by id: String) -> EquipmentItem? {
         return allShopAmulets.first(where: { $0.id == id })
     }
+
+    static func findItem(by id: String) -> EquipmentItem? {
+        return findWeapon(by: id)
+            ?? findArmor(by: id)
+            ?? findRing(by: id)
+            ?? findAmulet(by: id)
+    }
     
     static let starterWeapons: [CharacterClass: EquipmentItem] = [
         .archer: EquipmentItem(

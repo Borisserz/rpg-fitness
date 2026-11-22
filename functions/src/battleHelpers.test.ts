@@ -60,7 +60,11 @@ const pub = stripUserForPublic({
   fcmToken: "secret",
   gold: 999,
   pvpTrophies: 10,
+  stats: { totalSquats: 12, totalPushups: 0, totalPullups: 0, totalDips: 0 },
 });
-assert(pub.username === "A" && pub.pvpTrophies === 10 && !("fcmToken" in pub) && !("gold" in pub), "strip");
+assert(
+  pub.username === "A" && pub.pvpTrophies === 10 && pub.stats?.totalSquats === 12 && !("fcmToken" in pub) && !("gold" in pub),
+  "strip"
+);
 
 console.log("battleHelpers.test.ts: OK");

@@ -537,15 +537,15 @@ struct ConstellationSkillTreeView: View {
         }
         isUpgrading = true
         spendFeedback = nil
-        
-        var updatedChar = character
-        updatedChar.allocateStatPoint(stat: node.stat)
-        firebaseService.syncCharacter(updatedChar)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+
+        firebaseService.allocateStatPoint(stat: node.stat) { success, message in
             isUpgrading = false
             selectedNodeIndex = node.index
-            spendFeedback = "+\(node.stat) allocated"
+            if success {
+                spendFeedback = "+\(node.stat) allocated"
+            } else {
+                spendFeedback = message ?? "Couldn't allocate SP."
+            }
         }
     }
 }

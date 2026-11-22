@@ -10,7 +10,7 @@ class FirebaseService: ObservableObject {
     @Published var activeBattle: Battle?
     @Published var userClan: Clan?
     @Published var leaderboards: [String: [Character]] = [:]
-    @Published var friends: [String] = []
+    @Published var leaderboardClans: [Clan] = []
     @Published var activeWorldBoss: WorldBoss?
     /// Distinguishes first load vs confirmed empty vs listener error.
     @Published var worldBossStatus: WorldBossLoadStatus = .loading
@@ -38,18 +38,13 @@ class FirebaseService: ObservableObject {
     static let shared = FirebaseService()
     
     init() {
-        // Load persisted friends list if it exists
-        if let savedFriends = UserDefaults.standard.stringArray(forKey: "saved_friends") {
-            self.friends = savedFriends
-        }
-
-        fetchLeaderboards()
         listenToWorldBoss()
 
         AuthManager.shared.$currentUser
             .compactMap { $0 }
             .sink { [weak self] user in
                 self?.startListeningToCharacter(uid: user.uid)
+                self?.fetchLeaderboards()
                 Task { [weak self] in
                     await BlockedUsersStore.syncWithServer(ownerUid: user.uid)
                     await MainActor.run {
@@ -221,25 +216,6 @@ class FirebaseService: ObservableObject {
         if let data = try? JSONEncoder().encode(char) {
             UserDefaults.standard.set(data, forKey: "saved_character")
         }
-    }
-    
-    func saveFriendsToDisk() {
-        UserDefaults.standard.set(friends, forKey: "saved_friends")
-    }
-    
-    // MARK: - Friends Management
-    func addFriend(name: String) -> Bool {
-        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanName.isEmpty else { return false }
-        guard !friends.contains(cleanName) else { return false }
-        friends.append(cleanName)
-        saveFriendsToDisk()
-        return true
-    }
-    
-    func removeFriend(name: String) {
-        friends.removeAll { $0 == name }
-        saveFriendsToDisk()
     }
     
     // MARK: - Character & Clan Sync
@@ -765,15 +741,26 @@ class FirebaseService: ObservableObject {
         }
     }
     
-    /// Remove a friend by UID from both users
+    /// Remove a friend by UID from both users (server-authoritative CF)
     func removeFriendByUid(_ uid: String) async {
         guard var char = currentCharacter else { return }
+        let previousFriends = char.friends
         char.friends = char.unwrappedFriends.filter { $0 != uid }
-        syncCharacter(char)
-        // Also remove ourselves from their friends list via Firestore
-        try? await Firestore.firestore().collection("users").document(uid).updateData([
-            "friends": FieldValue.arrayRemove([char.id])
-        ])
+        await MainActor.run {
+            self.currentCharacter = char
+        }
+        do {
+            _ = try await Functions.functions().httpsCallable("removeFriend").call(["targetUid": uid])
+        } catch {
+            await MainActor.run {
+                if var rolled = self.currentCharacter {
+                    rolled.friends = previousFriends
+                    self.currentCharacter = rolled
+                }
+                self.lastActionError = Self.userFacingCallableError(error, fallback: "Couldn't remove friend.")
+            }
+            print("removeFriend CF failed: \(error)")
+        }
     }
     
     func fetchCharacters(byUids uids: [String]) async -> [Character] {
@@ -812,41 +799,6 @@ class FirebaseService: ObservableObject {
         functions.httpsCallable("declineFriendRequest").call(["senderUid": uid]) { _, error in
             if let error = error {
                 print("Failed to decline friend request: \(error)")
-            }
-        }
-    }
-    
-    func startFriendDuel(playerClass: CharacterClass, friendName: String, friendClass: CharacterClass, completion: @escaping (Bool) -> Void) {
-        // Look up friend's UID in Firestore by username, then challenge them.
-        // Never fall back to bot matchmaking — that fakes a successful friend duel.
-        Task {
-            let db = Firestore.firestore()
-            do {
-                let snapshot = try await db.collection("users")
-                    .whereField("username", isEqualTo: friendName)
-                    .limit(to: 1)
-                    .getDocuments()
-                
-                if let friendDoc = snapshot.documents.first {
-                    let friendUid = friendDoc.documentID
-                    await MainActor.run {
-                        MultiplayerService.shared.challengeFriend(friendUid: friendUid)
-                        completion(true)
-                    }
-                } else {
-                    await MainActor.run {
-                        MultiplayerService.shared.matchmakingError =
-                            "Couldn't find \(friendName) online. Ask them to open FitRPG, then try again."
-                        completion(false)
-                    }
-                }
-            } catch {
-                print("startFriendDuel error: \(error)")
-                await MainActor.run {
-                    MultiplayerService.shared.matchmakingError =
-                        "Couldn't start duel with \(friendName). Check your connection and try again."
-                    completion(false)
-                }
             }
         }
     }
@@ -1096,18 +1048,82 @@ class FirebaseService: ObservableObject {
     }
     
     func depositClanGold(amount: Int) {
-        guard var char = currentCharacter else { return }
-        guard var clan = userClan else { return }
-        guard char.gold >= amount else { return }
-        
+        guard amount > 0, var char = currentCharacter, var clan = userClan else { return }
+        guard char.gold >= amount else {
+            lastActionError = "Not enough gold!"
+            return
+        }
+
+        let prevUserGold = char.gold
+        let prevTreasury = clan.treasuryGold ?? 0
         char.gold -= amount
         self.currentCharacter = char
-        self.syncCharacter(char)
-        
-        let currentTreasury = clan.treasuryGold ?? 0
-        clan.treasuryGold = currentTreasury + amount
+        clan.treasuryGold = prevTreasury + amount
         self.userClan = clan
-        self.syncClan(clan)
+
+        Task {
+            do {
+                let result = try await Functions.functions().httpsCallable("depositClanGold").call(["amount": amount])
+                if let data = result.data as? [String: Any] {
+                    await MainActor.run {
+                        if let serverGold = data["gold"] as? Int {
+                            self.currentCharacter?.gold = serverGold
+                        }
+                        if let serverTreasury = data["treasuryGold"] as? Int {
+                            self.userClan?.treasuryGold = serverTreasury
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.currentCharacter?.gold = prevUserGold
+                    self.userClan?.treasuryGold = prevTreasury
+                    self.lastActionError = Self.userFacingCallableError(error, fallback: "Couldn't deposit gold.")
+                }
+                print("depositClanGold CF failed: \(error)")
+            }
+        }
+    }
+
+    func activateClanBuff(_ buff: ClanBuffType, completion: @escaping (Bool, String?) -> Void) {
+        guard let clan = userClan else {
+            completion(false, "Join a clan first.")
+            return
+        }
+        guard (clan.treasuryGold ?? 0) >= buff.cost else {
+            let msg = "Need \(buff.cost) gold in Castle Treasury."
+            lastActionError = msg
+            completion(false, msg)
+            return
+        }
+
+        Task {
+            do {
+                let result = try await Functions.functions().httpsCallable("activateClanBuff").call([
+                    "buffId": buff.rawValue
+                ])
+                if let data = result.data as? [String: Any] {
+                    await MainActor.run {
+                        if let treasury = data["treasuryGold"] as? Int {
+                            self.userClan?.treasuryGold = treasury
+                        }
+                        if let buffs = data["activeBuffs"] as? [String: Double] {
+                            self.userClan?.activeBuffs = buffs
+                        }
+                        completion(true, "\(buff.title) activated!")
+                    }
+                } else {
+                    await MainActor.run { completion(true, "\(buff.title) activated!") }
+                }
+            } catch {
+                let friendly = Self.userFacingCallableError(error, fallback: "Couldn't activate blessing.")
+                await MainActor.run {
+                    self.lastActionError = friendly
+                    completion(false, friendly)
+                }
+                print("activateClanBuff CF failed: \(error)")
+            }
+        }
     }
     
     func joinClan(_ clan: Clan) {
@@ -1374,63 +1390,225 @@ class FirebaseService: ObservableObject {
     }
 
     func fetchLeaderboards(for types: [String]) {
-        // Run native Firestore query for accurate timestamp decoding and real-time reflection
-        fetchLeaderboardsFallback(for: types)
-    }
+        guard Auth.auth().currentUser != nil else { return }
+        let requestedTypes = Array(Set(types.filter { $0 != "friends" }))
+        let blocked = BlockedUsersStore.blockedUIDs
 
-    private func fetchLeaderboardsFallback(for types: [String]) {
-        // Direct Firestore fallback (no server-side sort guarantee for composite queries)
-        let db = Firestore.firestore()
+        Task {
+            if !requestedTypes.isEmpty {
+                do {
+                    let result = try await Functions.functions().httpsCallable("getLeaderboards").call([
+                        "types": requestedTypes
+                    ])
+                    if let payload = result.data as? [String: Any] {
+                        var decodedPlayers: [String: [Character]] = [:]
+                        var decodedClans: [Clan]? = nil
 
-        // Always fetch global — order by currentLevel (stored field, updated on every login)
-        db.collection("users")
-            .order(by: "currentLevel", descending: true)
-            .limit(to: 50)
-            .getDocuments { [weak self] snapshot, error in
-                guard let self = self, let docs = snapshot?.documents else { return }
-                let players = docs.compactMap { try? $0.data(as: Character.self) }
-                DispatchQueue.main.async {
-                    self.leaderboards["global"] = players
-                    self.leaderboards["friends"] = players.filter { self.friends.contains($0.username) }
+                        for type in requestedTypes {
+                            guard let rawList = payload[type] as? [[String: Any]] else { continue }
+                            if type == "clans" {
+                                decodedClans = rawList.compactMap { dict -> Clan? in
+                                    guard JSONSerialization.isValidJSONObject(dict),
+                                          let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+                                    return try? JSONDecoder().decode(Clan.self, from: data)
+                                }
+                            } else {
+                                let players = rawList.compactMap { dict -> Character? in
+                                    guard JSONSerialization.isValidJSONObject(dict),
+                                          let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+                                    return try? JSONDecoder().decode(Character.self, from: data)
+                                }.filter { !blocked.contains($0.id) }
+                                decodedPlayers[type] = players
+                            }
+                        }
+
+                        await MainActor.run {
+                            for (k, v) in decodedPlayers {
+                                self.leaderboards[k] = v
+                            }
+                            if let decodedClans {
+                                self.leaderboardClans = decodedClans
+                            }
+                        }
+                    }
+                } catch {
+                    print("getLeaderboards CF failed: \(error)")
+                    await MainActor.run {
+                        self.fetchLeaderboardsFallback(for: requestedTypes)
+                    }
                 }
             }
 
-        // Fetch pvp_1v1 sorted by pvpTrophies
+            // Populate friends leaderboard using UID-based Character.friends
+            if let char = await MainActor.run(body: { self.currentCharacter }) {
+                let friendUids = char.unwrappedFriends.filter { !blocked.contains($0) }
+                if friendUids.isEmpty {
+                    await MainActor.run {
+                        self.leaderboards["friends"] = [char]
+                    }
+                } else {
+                    let fetchedFriends = await self.fetchCharacters(byUids: friendUids)
+                    var combined = fetchedFriends.filter { !blocked.contains($0.id) }
+                    if !combined.contains(where: { $0.id == char.id }) {
+                        combined.append(char)
+                    }
+                    combined.sort {
+                        if $0.level != $1.level { return $0.level > $1.level }
+                        return $0.unwrappedPvPTrophies > $1.unwrappedPvPTrophies
+                    }
+                    await MainActor.run {
+                        self.leaderboards["friends"] = combined
+                    }
+                }
+            }
+        }
+    }
+
+    private func fetchLeaderboardsFallback(for types: [String]) {
+        let db = Firestore.firestore()
+        let blocked = BlockedUsersStore.blockedUIDs
+
+        if types.contains("global") {
+            db.collection("users")
+                .order(by: "currentLevel", descending: true)
+                .limit(to: 50)
+                .getDocuments { [weak self] snapshot, _ in
+                    guard let self = self, let docs = snapshot?.documents else { return }
+                    let players = docs.compactMap { try? $0.data(as: Character.self) }
+                        .filter { !blocked.contains($0.id) }
+                    DispatchQueue.main.async {
+                        self.leaderboards["global"] = players
+                    }
+                }
+        }
+
         if types.contains("pvp_1v1") {
             db.collection("users")
                 .order(by: "pvpTrophies", descending: true)
                 .limit(to: 50)
-                .getDocuments { [weak self] snapshot, error in
+                .getDocuments { [weak self] snapshot, _ in
                     guard let self = self, let docs = snapshot?.documents else { return }
                     let players = docs.compactMap { try? $0.data(as: Character.self) }
+                        .filter { !blocked.contains($0.id) }
                     DispatchQueue.main.async { self.leaderboards["pvp_1v1"] = players }
                 }
         }
-        
-        // Fetch per-class boards — order by currentLevel, filter + sort by classTrophies in memory
+
         let classTypes = types.filter { CharacterClass.allCases.map { $0.rawValue }.contains($0) }
         if !classTypes.isEmpty {
             db.collection("users")
                 .order(by: "currentLevel", descending: true)
                 .limit(to: 200)
-                .getDocuments { [weak self] snapshot, error in
+                .getDocuments { [weak self] snapshot, _ in
                     guard let self = self, let docs = snapshot?.documents else { return }
                     let allPlayers = docs.compactMap { try? $0.data(as: Character.self) }
+                        .filter { !blocked.contains($0.id) }
                     DispatchQueue.main.async {
                         for classType in classTypes {
                             guard let cls = CharacterClass(rawValue: classType) else { continue }
-                            // Filter: players who have interacted with this class
                             let filtered = allPlayers.filter { player in
                                 let classLevel = player.progressions[cls.rawValue]?.level ?? 1
                                 let trophies = player.trophies(for: cls)
                                 return classLevel > 1 || trophies > 0 || player.selectedClass == cls
                             }
-                            // Sort by per-class trophies descending
                             let sorted = filtered.sorted { $0.trophies(for: cls) > $1.trophies(for: cls) }
                             self.leaderboards[classType] = Array(sorted.prefix(30))
                         }
                     }
                 }
+        }
+    }
+
+    // MARK: - Server-Authoritative Stat Points & Daily Quests
+
+    func allocateStatPoint(stat: String, completion: @escaping (Bool, String?) -> Void) {
+        guard var char = currentCharacter else {
+            completion(false, "No hero loaded.")
+            return
+        }
+        guard char.statPoints > 0 else {
+            completion(false, "No SP available.")
+            return
+        }
+
+        char.allocateStatPoint(stat: stat)
+        self.currentCharacter = char
+        writeWidgetSnapshot(from: char)
+
+        Task {
+            do {
+                let result = try await Functions.functions().httpsCallable("allocateStatPoint").call([
+                    "stat": stat
+                ])
+                if let data = result.data as? [String: Any],
+                   let remainingSP = data["statPoints"] as? Int {
+                    await MainActor.run {
+                        self.currentCharacter?.statPoints = remainingSP
+                        completion(true, nil)
+                    }
+                } else {
+                    await MainActor.run { completion(true, nil) }
+                }
+            } catch {
+                await MainActor.run {
+                    if var rolled = self.currentCharacter {
+                        rolled.rollbackStatPoint(stat: stat)
+                        self.currentCharacter = rolled
+                        self.writeWidgetSnapshot(from: rolled)
+                    }
+                    let friendly = Self.userFacingCallableError(error, fallback: "Couldn't allocate stat point.")
+                    self.lastActionError = friendly
+                    completion(false, friendly)
+                }
+                print("allocateStatPoint CF failed: \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    func claimDailyQuest(_ quest: DailyQuest, completion: ((Bool) -> Void)? = nil) {
+        guard var char = currentCharacter else {
+            completion?(false)
+            return
+        }
+        let dayKey = DailyQuestProgressStore.utcDayKey()
+        let prevChar = char
+        DailyQuestProgressStore.markClaimed(questId: quest.id)
+
+        _ = char.addXP(quest.xpReward)
+        char.gold += quest.goldReward
+        var claimedMap = char.claimedDailyQuests ?? [:]
+        var todayIds = claimedMap[dayKey] ?? []
+        if !todayIds.contains(quest.id) {
+            todayIds.append(quest.id)
+        }
+        claimedMap[dayKey] = todayIds
+        char.claimedDailyQuests = claimedMap
+        self.currentCharacter = char
+        writeWidgetSnapshot(from: char)
+
+        Task {
+            do {
+                _ = try await Functions.functions().httpsCallable("awardActivityRewards").call([
+                    "xp": quest.xpReward,
+                    "gold": quest.goldReward,
+                    "reason": "quest",
+                    "questId": quest.id
+                ])
+                if quest.goldReward > 0 {
+                    DailyQuestProgressStore.record(.goldEarned, amount: quest.goldReward)
+                }
+                await MainActor.run { completion?(true) }
+            } catch {
+                await MainActor.run {
+                    self.currentCharacter = prevChar
+                    self.writeWidgetSnapshot(from: prevChar)
+                    DailyQuestProgressStore.unmarkClaimed(questId: quest.id)
+                    self.lastActionError = Self.userFacingCallableError(error, fallback: "Couldn't claim quest reward.")
+                    completion?(false)
+                }
+                print("claimDailyQuest CF failed: \(error)")
+            }
         }
     }
     
@@ -1638,9 +1816,7 @@ class FirebaseService: ObservableObject {
         currentListenedClanId = nil
         currentCharacter = nil
         userClan = nil
-        friends = []
         UserDefaults.standard.removeObject(forKey: "saved_character")
-        UserDefaults.standard.removeObject(forKey: "saved_friends")
         _ = uid
     }
 }

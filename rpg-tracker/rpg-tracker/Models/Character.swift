@@ -135,6 +135,8 @@ struct Character: Codable, Identifiable {
     var fcmToken: String? = nil
     var lastActive: Date? = nil
     var lastHealthSyncDate: Date? = nil
+    /// Server-managed UTC day map of claimed daily quest IDs.
+    var claimedDailyQuests: [String: [String]]? = nil
     
     var unwrappedPvPWins: Int { pvpWins ?? 0 }
     var unwrappedPvPTrophies: Int { pvpTrophies ?? 0 }
@@ -171,6 +173,60 @@ struct Character: Codable, Identifiable {
         CharacterClass.healer.rawValue: ClassProgression(level: 1, xp: 0, totalReps: 0, storyStage: 1)
     ]
     
+    enum CodingKeys: String, CodingKey {
+        case id, username, selectedClass, energy, maxEnergy, basePower, gold, avatarName
+        case statPoints, baseStrength, baseDexterity, baseIntelligence, baseVitality
+        case stats, equippedWeaponId, equippedArmorId, equippedRingId, equippedAmuletId
+        case ownedEquipmentIds, clanId, pvpWins, pvpTrophies, friends, friendRequests
+        case currentLevel, classTrophies, fcmToken, lastActive, lastHealthSyncDate
+        case progressions, claimedDailyQuests
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        username = try c.decodeIfPresent(String.self, forKey: .username) ?? "Hero"
+        selectedClass = try c.decodeIfPresent(CharacterClass.self, forKey: .selectedClass) ?? .archer
+        energy = try c.decodeIfPresent(Int.self, forKey: .energy) ?? 100
+        maxEnergy = try c.decodeIfPresent(Int.self, forKey: .maxEnergy) ?? 100
+        basePower = try c.decodeIfPresent(Int.self, forKey: .basePower) ?? 100
+        gold = try c.decodeIfPresent(Int.self, forKey: .gold) ?? 0
+        avatarName = try c.decodeIfPresent(String.self, forKey: .avatarName) ?? selectedClass.defaultAvatarName
+        statPoints = try c.decodeIfPresent(Int.self, forKey: .statPoints) ?? 0
+        baseStrength = try c.decodeIfPresent(Int.self, forKey: .baseStrength) ?? 10
+        baseDexterity = try c.decodeIfPresent(Int.self, forKey: .baseDexterity) ?? 10
+        baseIntelligence = try c.decodeIfPresent(Int.self, forKey: .baseIntelligence) ?? 10
+        baseVitality = try c.decodeIfPresent(Int.self, forKey: .baseVitality) ?? 10
+        stats = try c.decodeIfPresent(CharacterStats.self, forKey: .stats) ?? CharacterStats()
+        equippedWeaponId = try c.decodeIfPresent(String.self, forKey: .equippedWeaponId)
+        equippedArmorId = try c.decodeIfPresent(String.self, forKey: .equippedArmorId)
+        equippedRingId = try c.decodeIfPresent(String.self, forKey: .equippedRingId)
+        equippedAmuletId = try c.decodeIfPresent(String.self, forKey: .equippedAmuletId)
+        ownedEquipmentIds = try c.decodeIfPresent([String].self, forKey: .ownedEquipmentIds) ?? ["w_arch_1", "a_arch_1", "w_mage_1", "a_mage_1", "w_swor_1", "a_swor_1", "w_heal_1", "a_heal_1"]
+        clanId = try c.decodeIfPresent(String.self, forKey: .clanId)
+        pvpWins = try c.decodeIfPresent(Int.self, forKey: .pvpWins) ?? 0
+        pvpTrophies = try c.decodeIfPresent(Int.self, forKey: .pvpTrophies) ?? 0
+        friends = try c.decodeIfPresent([String].self, forKey: .friends) ?? []
+        friendRequests = try c.decodeIfPresent([String].self, forKey: .friendRequests) ?? []
+        currentLevel = try c.decodeIfPresent(Int.self, forKey: .currentLevel)
+        classTrophies = try c.decodeIfPresent([String: Int].self, forKey: .classTrophies)
+        fcmToken = try c.decodeIfPresent(String.self, forKey: .fcmToken)
+        lastActive = try c.decodeIfPresent(Date.self, forKey: .lastActive)
+        lastHealthSyncDate = try c.decodeIfPresent(Date.self, forKey: .lastHealthSyncDate)
+        claimedDailyQuests = try c.decodeIfPresent([String: [String]].self, forKey: .claimedDailyQuests)
+
+        var decodedProg = try c.decodeIfPresent([String: ClassProgression].self, forKey: .progressions) ?? [:]
+        for cls in CharacterClass.allCases where decodedProg[cls.rawValue] == nil {
+            decodedProg[cls.rawValue] = ClassProgression(level: 1, xp: 0, totalReps: 0, storyStage: 1)
+        }
+        if let lvl = currentLevel, (decodedProg[selectedClass.rawValue]?.level ?? 1) < lvl {
+            var p = decodedProg[selectedClass.rawValue] ?? ClassProgression()
+            p.level = lvl
+            decodedProg[selectedClass.rawValue] = p
+        }
+        progressions = decodedProg
+    }
+
     // Custom initializer to match mock initialization calls in services & viewmodels
     init(
         id: String,
@@ -202,7 +258,8 @@ struct Character: Codable, Identifiable {
         lastActive: Date? = nil,
         lastHealthSyncDate: Date? = nil,
         progressions: [String: ClassProgression]? = nil,
-        avatarName: String? = "avatar_knight"
+        avatarName: String? = "avatar_knight",
+        claimedDailyQuests: [String: [String]]? = nil
     ) {
         self.id = id
         self.username = username
@@ -231,6 +288,7 @@ struct Character: Codable, Identifiable {
         self.friendRequests = friendRequests
         self.fcmToken = fcmToken
         self.lastHealthSyncDate = lastHealthSyncDate
+        self.claimedDailyQuests = claimedDailyQuests
         
         var baseProgressions = progressions ?? [
             CharacterClass.archer.rawValue: ClassProgression(level: 1, xp: 0, totalReps: 0, storyStage: 1),
@@ -354,6 +412,17 @@ struct Character: Codable, Identifiable {
         default: return
         }
         statPoints -= 1
+    }
+
+    mutating func rollbackStatPoint(stat: String) {
+        switch stat {
+        case "STR": baseStrength = max(10, baseStrength - 1)
+        case "DEX": baseDexterity = max(10, baseDexterity - 1)
+        case "INT": baseIntelligence = max(10, baseIntelligence - 1)
+        case "VIT": baseVitality = max(10, baseVitality - 1)
+        default: return
+        }
+        statPoints += 1
     }
     
     mutating func addXP(_ amount: Int) -> Bool {

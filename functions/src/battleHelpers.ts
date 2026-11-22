@@ -83,6 +83,8 @@ export const PUBLIC_PLAYER_FIELDS = [
   "pvpTrophies",
   "classTrophies",
   "pvpWins",
+  "stats",
+  "progressions",
 ] as const;
 
 export function stripUserForPublic(data: Record<string, any> | undefined | null): Record<string, any> {
